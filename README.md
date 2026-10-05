@@ -17,6 +17,16 @@ Android port of [melonDS](https://melonds.kuribo64.net/), a DS and DSi emulator.
 Performance is solid on 64 bit devices with thread rendering and JIT enabled, and should run at full speed on flagship devices. Performance on older devices, specially
 32 bit devices, is very poor due to the lack of JIT support.
 
+# Renderers
+The 3D renderer can be selected in Settings → Video → Renderer:
+
+*  **Software** — renders 3D graphics on the CPU. The slowest option, but it works on every device.
+*  **OpenGL** — renders 3D graphics on the GPU through OpenGL ES.
+*  **Compute** — also GPU accelerated; uses a compute-shader pipeline with a different texture handling path, and requires OpenGL ES 3.2 support.
+
+## Black patches or corrupted 3D graphics
+Some games may show black patches or corrupted 3D graphics in certain scenes. If that happens, open Settings → Video → Renderer and switch to a different renderer — try Compute first, then the others. If problems persist, switch to Software, which works on every device.
+
 # Integration with third-party frontends
 It's possible to launch melonDS from third part frontends. For that, you will need to have the ROMs you want to launch already scanned by melonDS. Then, you can configure your
 third-party frontend with the following configuration:

@@ -228,6 +228,7 @@
     <string name="filter">Filter</string>
     <string name="internal_resolution">Internal resolution</string>
     <string name="renderer">Renderer</string>
+    <string name="renderer_summary">%s\n\nIf graphics are displayed incorrectly (e.g. black patches in some games), switch to a different renderer — try Compute first, then the others. Software is the fallback that works on every device.</string>
     <string name="dsi_camera_source">DSi camera source</string>
     <string name="external_screen_layout">External screen layout</string>
     <string name="external_display_screen">External display screen</string>

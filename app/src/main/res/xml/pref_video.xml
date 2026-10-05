@@ -6,7 +6,7 @@
     <ListPreference
             android:key="video_renderer"
             android:title="@string/renderer"
-            android:summary="%s"
+            android:summary="@string/renderer_summary"
             app:iconSpaceReserved="false"
             android:entries="@array/video_renderer_options"
             android:entryValues="@array/video_renderer_values"
