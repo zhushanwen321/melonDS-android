@@ -657,7 +657,7 @@ void MelonInstance::updateRenderer()
                 nds->GPU.SetRenderer3D(GLRenderer::New());
                 break;
             case Renderer::Compute:
-                nds->GPU.SetRenderer3D(ComputeRenderer::New());
+                nds->GPU.SetRenderer3D(ComputeRenderer::New(nds->GPU));
                 break;
             default: __builtin_unreachable();
         }
