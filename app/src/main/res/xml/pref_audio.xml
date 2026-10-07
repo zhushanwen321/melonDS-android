@@ -68,4 +68,12 @@
             android:entries="@array/fast_forward_audio_mute_threshold_options"
             android:entryValues="@array/fast_forward_audio_mute_threshold_values"
             android:defaultValue="0" />
+
+    <SwitchPreference
+            android:key="fast_forward_pitch_preserve"
+            android:title="@string/fast_forward_pitch_preserve_title"
+            android:summary="@string/fast_forward_pitch_preserve_summary"
+            android:dependency="sound_enabled"
+            app:iconSpaceReserved="false"
+            android:defaultValue="false" />
 </PreferenceScreen>

@@ -15,6 +15,7 @@ data class EmulatorConfiguration(
         val internalDirectory: String,
         val fastForwardSpeedMultiplier: Float,
         val fastForwardAudioMuteThreshold: Float,
+        val fastForwardPitchPreserve: Boolean,
         val rewindEnabled: Boolean,
         val rewindPeriodSeconds: Int,
         val rewindWindowSeconds: Int,

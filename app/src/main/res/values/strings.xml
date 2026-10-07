@@ -490,6 +490,9 @@
         <item>@string/fast_forward_audio_mute_threshold_entry_8x</item>
     </string-array>
 
+    <string name="fast_forward_pitch_preserve_title">Fast-forward pitch preservation</string>
+    <string name="fast_forward_pitch_preserve_summary">Only applies to fixed speed steps (1.5×-4×); 8× and unlimited speeds keep the current pitch. Expect about 0.1 second of silence when fast-forward starts. Turn this off if the frame rate is affected. Automatically disabled if initialization fails; toggle it back on to retry.</string>
+
     <string-array name="rom_icon_filtering_options">
         <item>None (Pixelated)</item>
         <item>Linear (Smooth)</item>

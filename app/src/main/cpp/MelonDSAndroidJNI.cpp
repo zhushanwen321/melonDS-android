@@ -54,6 +54,14 @@ std::atomic<bool> isFastForwardEnabled = false;
 // 阈值静音档位（设计 D7/U4）：0 = 从不静音（缺省，判定恒不触发），否则为静音线倍速（4/8）。
 // relaxed 足够——判定还门控于 acquire 读的加速标志，本值只有与标志同真时才被消费
 std::atomic<float> fastForwardAudioMuteThreshold = 0;
+// 加速音高保持开关（设置链）：缺省 false（关闭时回调路径零行为差异）。
+// relaxed 足够——消费还门控于 acquire 读的加速标志，本值只有与标志同真时才被读取
+std::atomic<bool> fastForwardPitchPreserve = false;
+// 读档/rewind 内容不连续置位（设计 D3 第五类）：读档后 SPU 输出缓冲换成新内容，
+// 音频回调检测到置位后清零并清空 SoundTouch 积压，防止旧内容经拉伸继续播出。
+// JNI 线程写、音频回调线程读；relaxed 足够——纯事件信号不携带数据依赖，
+// 消费晚一拍（几毫秒内）无正确性影响（与 isFastForwardEnabled 同族形态）
+std::atomic<bool> fastForwardStretchResetPending = false;
 
 jobject globalCameraManager;
 MelonDSAndroidCameraHandler* androidCameraHandler;
@@ -70,6 +78,7 @@ Java_me_magnum_melonds_MelonEmulator_setupEmulator(JNIEnv* env, jobject thiz, jo
     MelonDSAndroid::EmulatorConfiguration finalEmulatorConfiguration = MelonDSAndroidConfiguration::buildEmulatorConfiguration(env, emulatorConfiguration);
     fastForwardSpeedMultiplier.store(finalEmulatorConfiguration.fastForwardSpeedMultiplier, std::memory_order_relaxed);
     fastForwardAudioMuteThreshold.store(finalEmulatorConfiguration.fastForwardAudioMuteThreshold, std::memory_order_relaxed);
+    fastForwardPitchPreserve.store(finalEmulatorConfiguration.fastForwardPitchPreserve, std::memory_order_relaxed);
 
     globalCameraManager = env->NewGlobalRef(cameraManager);
 
@@ -359,6 +368,10 @@ Java_me_magnum_melonds_MelonEmulator_resetEmulation(JNIEnv* env, jobject thiz) {
         // Make sure that the thread is really paused to avoid data corruption
         while (!isThreadReallyPaused);
         MelonDSAndroid::reset();
+        // reset 后 SPU::Reset 经 InitOutput 清空 SPU 输出缓冲（内容不连续，设计 D3 第五类，
+        // 与读档/rewind 同构；OboeCallback 与其 SoundTouch 实例不随 reset 重建）：置位让
+        // 音频回调清 SoundTouch 积压，避免 reset 前旧内容经拉伸残留播出
+        fastForwardStretchResetPending.store(true, std::memory_order_relaxed);
         Java_me_magnum_melonds_MelonEmulator_resumeEmulation(env, thiz);
     } else {
         // If the emulation is stopping, just ignore it
@@ -377,7 +390,15 @@ JNIEXPORT jboolean JNICALL
 Java_me_magnum_melonds_MelonEmulator_loadStateInternal(JNIEnv* env, jobject thiz, jstring path)
 {
     const char* saveStatePath = path == nullptr ? nullptr : env->GetStringUTFChars(path, JNI_FALSE);
-    return MelonDSAndroid::loadState(saveStatePath);
+    bool result = MelonDSAndroid::loadState(saveStatePath);
+    if (result)
+    {
+        // 读档成功后 SPU 输出缓冲内容已变（内容不连续，设计 D3）：置位让音频回调清 SoundTouch 积压。
+        // 读档失败时模拟器状态与 SPU 缓冲内容未变（失败路径为前置失败或备份还原，无内容不连续），
+        // 不置位——避免无谓的 SoundTouch.clear + 重填期静音
+        fastForwardStretchResetPending.store(true, std::memory_order_relaxed);
+    }
+    return result;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -417,6 +438,14 @@ Java_me_magnum_melonds_MelonEmulator_loadRewindState(JNIEnv* env, jobject thiz, 
         };
 
         result = MelonDSAndroid::loadRewindState(state);
+
+        if (result)
+        {
+            // rewind 恢复成功后 SPU 输出缓冲内容已变（内容不连续，设计 D3）：置位让音频回调清
+            // SoundTouch 积压。恢复失败时模拟器状态经备份还原、SPU 缓冲内容未变（无内容不连续），
+            // 不置位——避免无谓的 SoundTouch.clear + 重填期静音
+            fastForwardStretchResetPending.store(true, std::memory_order_relaxed);
+        }
 
         // Resume emulation if it was running
         if (!wasPaused) {
@@ -565,6 +594,7 @@ Java_me_magnum_melonds_MelonEmulator_updateEmulatorConfiguration(JNIEnv* env, jo
 
     fastForwardSpeedMultiplier.store(newConfiguration.fastForwardSpeedMultiplier, std::memory_order_relaxed);
     fastForwardAudioMuteThreshold.store(newConfiguration.fastForwardAudioMuteThreshold, std::memory_order_relaxed);
+    fastForwardPitchPreserve.store(newConfiguration.fastForwardPitchPreserve, std::memory_order_relaxed);
 
     MelonDSAndroid::updateEmulatorConfiguration(std::make_unique<MelonDSAndroid::EmulatorConfiguration>(std::move(newConfiguration)));
 
