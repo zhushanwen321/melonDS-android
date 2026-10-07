@@ -479,6 +479,17 @@
         <item>8x</item>
     </string-array>
 
+    <string name="fast_forward_audio_mute_threshold_title">Fast-forward audio mute threshold</string>
+    <string name="fast_forward_audio_mute_threshold_entry_never">Never</string>
+    <string name="fast_forward_audio_mute_threshold_entry_4x">Above 4x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_8x">Above 8x</string>
+
+    <string-array name="fast_forward_audio_mute_threshold_options">
+        <item>@string/fast_forward_audio_mute_threshold_entry_never</item>
+        <item>@string/fast_forward_audio_mute_threshold_entry_4x</item>
+        <item>@string/fast_forward_audio_mute_threshold_entry_8x</item>
+    </string-array>
+
     <string-array name="rom_icon_filtering_options">
         <item>None (Pixelated)</item>
         <item>Linear (Smooth)</item>

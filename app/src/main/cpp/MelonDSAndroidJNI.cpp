@@ -45,11 +45,15 @@ bool stop;
 bool paused;
 std::atomic_bool isThreadReallyPaused = false;
 int observedFrames = 0;
-float fps = 0;
+// 三个全局由模拟/JNI 线程写、音频回调线程读，必须原子（设计 D5）；isFastForwardEnabled 是内存序主锚
+std::atomic<float> fps = 0;
 int targetFps;
-float fastForwardSpeedMultiplier;
+std::atomic<float> fastForwardSpeedMultiplier;
 bool limitFps = true;
-bool isFastForwardEnabled = false;
+std::atomic<bool> isFastForwardEnabled = false;
+// 阈值静音档位（设计 D7/U4）：0 = 从不静音（缺省，判定恒不触发），否则为静音线倍速（4/8）。
+// relaxed 足够——判定还门控于 acquire 读的加速标志，本值只有与标志同真时才被消费
+std::atomic<float> fastForwardAudioMuteThreshold = 0;
 
 jobject globalCameraManager;
 MelonDSAndroidCameraHandler* androidCameraHandler;
@@ -64,7 +68,8 @@ JNIEXPORT void JNICALL
 Java_me_magnum_melonds_MelonEmulator_setupEmulator(JNIEnv* env, jobject thiz, jobject emulatorConfiguration, jobject cameraManager, jobject screenshotBuffer)
 {
     MelonDSAndroid::EmulatorConfiguration finalEmulatorConfiguration = MelonDSAndroidConfiguration::buildEmulatorConfiguration(env, emulatorConfiguration);
-    fastForwardSpeedMultiplier = finalEmulatorConfiguration.fastForwardSpeedMultiplier;
+    fastForwardSpeedMultiplier.store(finalEmulatorConfiguration.fastForwardSpeedMultiplier, std::memory_order_relaxed);
+    fastForwardAudioMuteThreshold.store(finalEmulatorConfiguration.fastForwardAudioMuteThreshold, std::memory_order_relaxed);
 
     globalCameraManager = env->NewGlobalRef(cameraManager);
 
@@ -298,7 +303,7 @@ Java_me_magnum_melonds_MelonEmulator_presentFrame(JNIEnv* env, jobject thiz, jlo
 JNIEXPORT jfloat JNICALL
 Java_me_magnum_melonds_MelonEmulator_getFPS(JNIEnv* env, jobject thiz)
 {
-    return fps;
+    return fps.load(std::memory_order_relaxed);
 }
 
 JNIEXPORT void JNICALL
@@ -516,19 +521,24 @@ Java_me_magnum_melonds_MelonEmulator_takeScreenshot(JNIEnv* env, jobject thiz)
 JNIEXPORT void JNICALL
 Java_me_magnum_melonds_MelonEmulator_setFastForwardEnabled(JNIEnv* env, jobject thiz, jboolean enabled)
 {
-    isFastForwardEnabled = enabled;
+    float multiplier = fastForwardSpeedMultiplier.load(std::memory_order_relaxed);
+
     if (enabled) {
-        limitFps = fastForwardSpeedMultiplier > 0;
-        targetFps = 60 * fastForwardSpeedMultiplier;
+        limitFps = multiplier > 0;
+        targetFps = (int) (60 * multiplier);
     } else {
         limitFps = true;
         targetFps = 60;
     }
 
+    // 限帧参数先写、加速标志最后 release 写（内存序主锚，设计 D5）：
+    // 模拟/音频线程 acquire 到翻转时，本次切换后的限帧参数必然已可见
+    isFastForwardEnabled.store(enabled, std::memory_order_release);
+
     if (performanceHintSession != nullptr) {
         if (enabled) {
-            if (fastForwardSpeedMultiplier > 0) {
-                auto frameDurationNs = static_cast<int64_t>(FRAME_DURATION_60FPS_NS / fastForwardSpeedMultiplier);
+            if (multiplier > 0) {
+                auto frameDurationNs = static_cast<int64_t>(FRAME_DURATION_60FPS_NS / multiplier);
                 performanceHintSession->updateTargetWorkDuration(frameDurationNs);
             } else {
                 performanceHintSession->updateTargetWorkDuration(FRAME_DURATION_1000FPS_NS);
@@ -553,17 +563,19 @@ Java_me_magnum_melonds_MelonEmulator_updateEmulatorConfiguration(JNIEnv* env, jo
 {
     MelonDSAndroid::EmulatorConfiguration newConfiguration = MelonDSAndroidConfiguration::buildEmulatorConfiguration(env, emulatorConfiguration);
 
-    fastForwardSpeedMultiplier = newConfiguration.fastForwardSpeedMultiplier;
+    fastForwardSpeedMultiplier.store(newConfiguration.fastForwardSpeedMultiplier, std::memory_order_relaxed);
+    fastForwardAudioMuteThreshold.store(newConfiguration.fastForwardAudioMuteThreshold, std::memory_order_relaxed);
 
     MelonDSAndroid::updateEmulatorConfiguration(std::make_unique<MelonDSAndroid::EmulatorConfiguration>(std::move(newConfiguration)));
 
-    if (isFastForwardEnabled) {
-        limitFps = fastForwardSpeedMultiplier > 0;
-        targetFps = 60 * fastForwardSpeedMultiplier;
+    if (isFastForwardEnabled.load(std::memory_order_acquire)) {
+        float multiplier = fastForwardSpeedMultiplier.load(std::memory_order_relaxed);
+        limitFps = multiplier > 0;
+        targetFps = (int) (60 * multiplier);
 
         if (performanceHintSession != nullptr) {
-            if (fastForwardSpeedMultiplier > 0) {
-                auto frameDurationNs = static_cast<int64_t>(FRAME_DURATION_60FPS_NS / fastForwardSpeedMultiplier);
+            if (multiplier > 0) {
+                auto frameDurationNs = static_cast<int64_t>(FRAME_DURATION_60FPS_NS / multiplier);
                 performanceHintSession->updateTargetWorkDuration(frameDurationNs);
             } else {
                 performanceHintSession->updateTargetWorkDuration(FRAME_DURATION_1000FPS_NS);
@@ -618,6 +630,12 @@ void* emulate(void*)
     double lastMeasureFpsTick = startTick;
     double frameLimitError = 0.0;
 
+    // fps 测量窗口状态（设计 D2 规则 5）：节奏参数变化后的首个窗口缩短为 3 帧，
+    // 让音频侧前馈在转换后几十毫秒内拿到实测帧率
+    bool prevFastForwardEnabled = isFastForwardEnabled.load(std::memory_order_acquire);
+    float prevMultiplier = fastForwardSpeedMultiplier.load(std::memory_order_relaxed);
+    bool firstWindowAfterChange = false;
+
     MelonDSAndroid::start();
 
     auto manager = PerformanceHintManagerFactory::create(jniEnvHandler);
@@ -636,6 +654,8 @@ void* emulate(void*)
 
             frameLimitError = 0;
             lastTick = getCurrentMillis();
+            // 测量起点与限帧计时一并重置：暂停时长不得稀释恢复后首个 fps 测量值（D2 规则 5）
+            lastMeasureFpsTick = lastTick;
             isThreadReallyPaused = false;
         }
 
@@ -688,11 +708,32 @@ void* emulate(void*)
             lastTick = getCurrentMillis();
         }
 
+        // 凡观察到节奏参数变化（标志翻转或倍速变化，无论来源——含设置热更新），一律重置测量窗口
+        // 与起点：只重置计数不重置起点，首个测量值会被跨窗口的旧时长稀释（D2 规则 5/7）
+        bool fastForwardEnabled = isFastForwardEnabled.load(std::memory_order_acquire);
+        float multiplier = fastForwardSpeedMultiplier.load(std::memory_order_relaxed);
+        if (fastForwardEnabled != prevFastForwardEnabled || multiplier != prevMultiplier)
+        {
+            observedFrames = 0;
+            lastMeasureFpsTick = lastTick;
+            firstWindowAfterChange = true;
+            prevFastForwardEnabled = fastForwardEnabled;
+            prevMultiplier = multiplier;
+        }
+
+        // 测量窗口三档：常速 30 帧（现状不动）、转换后首窗口 3 帧、加速期常态 6 帧。
+        // 常态窗口取 6 而非 10：低性能设备加速期实际帧率可能只有 60fps 上下，
+        // 10 帧 = 167ms 的测量延迟会放大前馈跟踪误差（真机实测），6 帧 = 100ms@60fps
         observedFrames++;
-        if (observedFrames >= 30) {
-            fps = (observedFrames * 1000.0) / (lastTick - lastMeasureFpsTick);
+        int measurementWindowFrames = 30;
+        if (fastForwardEnabled)
+            measurementWindowFrames = firstWindowAfterChange ? 3 : 6;
+
+        if (observedFrames >= measurementWindowFrames) {
+            fps.store((float) ((observedFrames * 1000.0) / (lastTick - lastMeasureFpsTick)), std::memory_order_release);
             lastMeasureFpsTick = lastTick;
             observedFrames = 0;
+            firstWindowAfterChange = false;
         }
     }
 

@@ -17,6 +17,7 @@ interface SettingsRepository {
 
     fun getTheme(): Theme
     fun getFastForwardSpeedMultiplier(): Float
+    fun getFastForwardAudioMuteThreshold(): Float
     fun isRewindEnabled(): Boolean
     fun getRewindWindowPosition(): RewindWindowPosition
     fun isSustainedPerformanceModeEnabled(): Boolean

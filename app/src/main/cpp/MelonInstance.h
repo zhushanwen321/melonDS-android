@@ -49,6 +49,9 @@ public:
     void releaseKey(u32 key);
     int readAudioOutput(s16* buffer, int length);
     void setAudioOutputSkew(double skew);
+    int getAudioOutputSize();
+    void trimAudioOutput();
+    void drainAudioOutput();
     bool takeScreenshot();
     void loadCheats(std::list<Cheat> cheats);
     int sendNetPacket(u8* data, int length);

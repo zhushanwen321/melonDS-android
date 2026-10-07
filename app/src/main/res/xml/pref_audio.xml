@@ -58,4 +58,14 @@
             android:entries="@array/mic_source_options"
             android:entryValues="@array/mic_source_values"
             android:defaultValue="blow" />
+
+    <ListPreference
+            android:key="fast_forward_audio_mute_threshold"
+            android:title="@string/fast_forward_audio_mute_threshold_title"
+            android:dependency="sound_enabled"
+            android:summary="%s"
+            app:iconSpaceReserved="false"
+            android:entries="@array/fast_forward_audio_mute_threshold_options"
+            android:entryValues="@array/fast_forward_audio_mute_threshold_values"
+            android:defaultValue="0" />
 </PreferenceScreen>
