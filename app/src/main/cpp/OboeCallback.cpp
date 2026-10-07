@@ -24,14 +24,17 @@ extern std::atomic<bool> fastForwardStretchResetPending;
 // 常速基准比率：60fps 目标对 NDS 实际帧率的换算（≈1.0029）
 static constexpr double kBaseSkewRatio = 60.0 / INTERNAL_FRAME_RATE;
 
-// SPU 环形缓冲为 2048 立体声帧（≈43ms），此处为其半容量
-static constexpr int kAudioOutputHalfCapacity = 1024;
+// SPU 环形缓冲为 8192 立体声帧（≈170ms，子模块 SPU.cpp InitOutput 同步扩容：拉伸路径全档位
+// 生效后，加速 N 倍的产出必须装得进「两次回调之间」的写入窗口——8× 时每周期写入约 3840 帧，
+// 8192 覆盖到 numFrames≈960 的省电模式设备），此处为其半容量。TrimOutput 的「半满」由核心
+// 按物理容量算（4096），本常量必须与它保持一致
+static constexpr int kAudioOutputHalfCapacity = 4096;
 
 // 全容量 = 2 × 半容量（安全阀阈值与低水位观察线的共同推导基准）
 static constexpr int kAudioOutputFullCapacity = 2 * kAudioOutputHalfCapacity;
 
-// 高水位安全阀阈值（设计 D4）：85% 容量 ≈ 1740 帧。触发后 Trim 把水位放回半满自然退出，
-// 无冷却期、无次数上限；正常常速（速率匹配、水位半满附近）永不触及
+// 高水位安全阀阈值（设计 D4）：85% 容量。触发后 Trim 把水位放回半满自然退出，
+// 无冷却期、无次数上限；正常常速（速率匹配、水位半满以下常态）永不触及
 static constexpr int kAudioOutputHighWaterThreshold = (int) (kAudioOutputFullCapacity * 0.85);
 
 // 待首测的回调数兜底上限：测量窗口可能在转换被回调观察到之前已走完（调度延迟），
@@ -74,7 +77,8 @@ static double slewLimitSkew(double target, double previous)
 // —— stretch 路径（设计 D4：tempo 控制器 = skew 控制器骨架的执行器替换）——
 
 // tempo 总钳（快照/slew 之后的总算子）：加速场景 tempo ≥ 1（tempo < 1 = 拉伸放慢，语义外）；
-// 上界给固定档实测倍速波动留余量（stretch 生效范围 ≤4×，实测可短暂超档，真机定档复核）
+// 上界给高倍速留余量：全档位生效后 8× 的 tempo ≈ 8 贴上界，实测速度短暂超档时靠它兜住
+//（tempo 超界 = SoundTouch 无法消化产样、积压上涨由安全阀清理）
 static constexpr double kStretchTempoMin = 1.0;
 static constexpr double kStretchTempoMax = 8.0;
 
@@ -85,10 +89,13 @@ static constexpr double kStretchBacklogBaselineSec = 0.1;
 // 安全阀只覆盖极端（<0.1%）
 static constexpr double kStretchBacklogValveSec = 0.250;
 
-// tempo 种子 = 档位倍速本身，调用点直写 (double) multiplier（三 skill 裁决 20261007 审 1：
-// 恒等转发函数删除）——无 kBaseSkewRatio 基准因子是设计 D4 的语义决策：skew 种子是产样
-// 密度需基准校正，tempo 种子是内容压缩比，两语义不同源；实际倍速与档位值的偏差由
-// 「待首测 + 首测快照直接生效」覆盖（首个测量窗口到来前 SoundTouch 尚在窗口填充期）
+// tempo 种子 = max(档位倍速, 1.5)（不限速档 multiplier = 0 不能直取，tempo 非法；取设置项
+// 最低档 1.5 保守起步，首个测量快照到达后即用真值）——无 kBaseSkewRatio 基准因子是设计 D4
+// 的语义决策：skew 种子是产样密度需基准校正，tempo 种子是内容压缩比，两语义不同源；
+// 实际倍速与档位值的偏差由「待首测 + 首测快照直接生效」覆盖（首个测量窗口到来前
+// SoundTouch 尚在窗口填充期）。SPU 产样速率随 SPU 环形扩容（8192）后恒在搬运窗口内，
+// 无需两级速率分配（该形态曾被尝试，因 blip 重采样语义为变调而非音高保持而废止）
+static constexpr double kStretchSeedSpeedFloor = 1.5;
 
 // 积压输出时长当量（设计 D4/§4.2）：SoundTouch 喂入未消费样本数折算到输出域时长——
 // M 个输入样本以 tempo 压缩后产出 M/tempo 个输出样本 @48000Hz。48000 = 本项目固定输出
@@ -200,9 +207,10 @@ OboeCallback::OboeCallback(int volume, void (*onErrorCallback)(void), std::ostre
     // stretch 侧出生态初始化（设计 D4 出生态规则）：构造时已处 stretch 态 = 按一次 stretch
     // 转换初始化（音频流重建即对象重建，「进入 stretch」转换在出生时永不发生）。
     // initStretcher 失败回退已把开关置关，此处读到的必为 false → bornStretch 为假 →
-    // tempo 侧按惰性初值落，控制器全部按现状路径初始化（§7.5 D 类回退语义）
+    // tempo 侧按惰性初值落，控制器全部按现状路径初始化（§7.5 D 类回退语义）。
+    // 全档位生效（2026-10-07 用户裁决）：stretchActive 不再含档位条件
     bool pitchPreserve = fastForwardPitchPreserve.load(std::memory_order_relaxed);
-    bool bornStretch = fastForward && pitchPreserve && (multiplier > 0 && multiplier <= 4);
+    bool bornStretch = fastForward && pitchPreserve;
     lastStretchActive = bornStretch;
     tempoAwaitingFirstMeasurementCycles = 0;
     backlogFreezeCycles = 0;
@@ -216,7 +224,7 @@ OboeCallback::OboeCallback(int volume, void (*onErrorCallback)(void), std::ostre
     {
         // 与回调内 stretch 转换初始化同构；EMA 初值含 fps 快照成分（同构 skew 侧出生态，
         // D2 规则 8 迁移）。无 clear 必要——实例全新无积压
-        double seed = (double) multiplier;
+        double seed = std::max((double) multiplier, kStretchSeedSpeedFloor);
         float bornFps = fps.load(std::memory_order_acquire);
         tempoEmaMeasuredRatio = std::max(seed, measuredRatioFromFps(bornFps));
         tempoAwaitingFirstMeasurement = true;
@@ -264,11 +272,11 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
     bool fastForward = isFastForwardEnabled.load(std::memory_order_acquire);
     float multiplier = fastForwardSpeedMultiplier.load(std::memory_order_relaxed);
 
-    // 三路径分流（设计 D3）：档位静态判定（multiplier > 0 && multiplier <= 4 唯一规范形），
-    // 不按实测倍速动态切换；8×/不限速档不接入拉伸器（容量账 §7.4）。开关 relaxed 读、
-    // 门控于 acquire 读的加速标志（与阈值静音同款内存序论证）
-    bool stretchActive = fastForward && fastForwardPitchPreserve.load(std::memory_order_relaxed)
-                         && (multiplier > 0 && multiplier <= 4);
+    // 两路径分流（2026-10-07 用户裁决：音高保持全档位生效，原「固定档 ≤4×」档位条件废止；
+    // .tmp/dev-flow/two-level-rate-design.md）：高倍速下 SPU 产样速率超出搬运窗口的容量账由
+    // SPU 环形扩容（2048→8192，子模块 SPU.cpp InitOutput）解决，不在路径判定上分流。
+    // 开关 relaxed 读、门控于 acquire 读的加速标志（与阈值静音同款内存序论证）
+    bool stretchActive = fastForward && fastForwardPitchPreserve.load(std::memory_order_relaxed);
 
     // 读档/rewind 内容不连续（设计 D3 第五类）：置位即消费清零（非 stretch 路径下也清，
     // 防标志跨路径残留）；stretch 路径下触发 SoundTouch.clear + tempo 转换初始化。
@@ -331,12 +339,12 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
         if (!lastStretchActive || multiplier != lastMultiplier || stretchResetTriggered)
         {
             // stretch 转换（设计 D3 进入规则）：进入 stretch（路径切换/流重建出生后首回调）、
-            // 加速中倍速热更新（含跨生效边界 2×↔8× 往返）、读档/rewind 内容不连续——
+            // 加速中倍速热更新（含跨全档位边界 2×↔8× 往返）、读档/rewind 内容不连续——
             // SoundTouch.clear() 全清（积压废弃，重填期口径 §5.2）+ tempo 转换初始化：
-            // 种子 = 档位倍速本身（(double) multiplier 直取，无基准因子）+ 待首测 +
+            // 种子 = max(档位倍速, 1.5)（不限速档 multiplier=0 兜底）+ 待首测 +
             // 首测快照直接生效（不经 slew）。种子是精心选择的初值，直接应用
             _stretch.clear();
-            double seed = (double) multiplier;
+            double seed = std::max((double) multiplier, kStretchSeedSpeedFloor);
             tempoEmaMeasuredRatio = seed;
             tempoAwaitingFirstMeasurement = true;
             tempoFpsAtTransition = fps.load(std::memory_order_acquire);
@@ -352,7 +360,7 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
             // 重初始化 = 转换规则 + EMA 上探——积压失控 = 前馈偏低，与现状 SPU 安全阀
             // 同一校正逻辑；反馈冻结 10 回调（照搬 Trim 后冻结形态，防读到假低积压）
             _stretch.clear();
-            double seed = (double) multiplier;
+            double seed = std::max((double) multiplier, kStretchSeedSpeedFloor);
             tempoEmaMeasuredRatio = seed;
             tempoEmaMeasuredRatio *= 1.02;
             tempoAwaitingFirstMeasurement = true;
@@ -412,7 +420,11 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
 
         appliedTempo = tempo;
         _stretch.setTempo(tempo);
-        // SPU 满速产样（设计 §4.1）：skew 固定 1.0，速率匹配移交 SoundTouch
+        // SPU 满速产样（设计 §4.1）：skew 固定 1.0，速率匹配全交 SoundTouch（tempo = 实测
+        // 速度，变速不变调）。全档位生效的前提是 SPU 环形扩容（8192）：加速 N 倍的产样速率
+        // （N×48000）必须装得进两次回调之间的写入窗口——见 kAudioOutputHalfCapacity 注释。
+        // 原恒 1.0 在 2048 容量下正是 8× 超窗丢样的根源，也是两级速率分配被尝试又废止的原因
+        //（blip 重采样语义为变调，skew < 1 会压低音调）
         currentInstance->setAudioOutputSkew(1.0);
         // SPU 侧缓冲余量重建的语义在 stretch 下由 SoundTouch.clear 承担（§7.2）；挂起的
         // skew 控制器残留的待重建标记（含出生态置位——出生即 stretch 时首回调不走转换分支）
@@ -569,10 +581,12 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
         currentInstance->setAudioOutputSkew(skew);
 
 #ifndef NDEBUG
-        // 运行时探针（设计 §7.3 P-fill 的落码）：debug 构建记录低水位事件（全容量 15% 观察线，
-        // 与 D4 口径一致），供真机标定与 underrun 诊断。放在读取输出之前——缓冲读空（fill=0，
-        // 最需诊断的形态）会在下方走硬零提前返回，探针必须先于它执行。高水位越界由安全阀 WARN 记录
-        if (fillLevel < (int) (kAudioOutputFullCapacity * 0.15))
+        // 运行时探针（设计 §7.3 P-fill 的落码）：debug 构建记录低水位事件（观察线 = 常速单帧
+        // 写入量 ≈ 800 帧的 40%——绝对口径，不随环形容量常量缩放：容量扩容后比例口径会大于
+        // 常速稳态存量、导致日志恒触发），供真机标定与 underrun 诊断。放在读取输出之前——
+        // 缓冲读空（fill=0，最需诊断的形态）会在下方走硬零提前返回，探针必须先于它执行。
+        // 高水位越界由安全阀 WARN 记录
+        if (fillLevel < 307)
             LOG_DEBUG("melonDS", "audio-probe low fill: fill=%d ff=%d fps=%.1f ema=%.3f skew=%.3f",
                       fillLevel, fastForward, fps.load(std::memory_order_relaxed), emaMeasuredRatio, skew);
 #endif

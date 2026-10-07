@@ -134,7 +134,7 @@
     <string name="fast_forward_audio_mute_threshold_entry_4x">Acima de 4x</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">Acima de 8x</string>
     <string name="fast_forward_pitch_preserve_title">Preservação de tom do avanço rápido</string>
-    <string name="fast_forward_pitch_preserve_summary">Funciona apenas em velocidades fixas (1,5×-4×); em 8× e sem limite, o tom atual é mantido. Há cerca de 0,1 segundo de silêncio ao iniciar o avanço rápido. Desative esta opção se a taxa de quadros for afetada. Desativado automaticamente se a inicialização falhar; reative para tentar novamente.</string>
+    <string name="fast_forward_pitch_preserve_summary">Funciona em todas as velocidades de avanço rápido. Há cerca de 0,1 segundo de silêncio ao iniciar o avanço rápido. Desative esta opção se a taxa de quadros for afetada. Desativado automaticamente se a inicialização falhar; reative para tentar novamente.</string>
     <string name="rewind_description">Quando ativado, um estado de salvamento é periodicamente salvo automaticamente. Sempre que quiser voltar em seu progresso por um curto período de tempo, basta abrir a tela de rebobinamento e selecionar o estado a partir do qual deseja retomar.\n\nEsteja ciente de que, ao ativar esse recurso, você pode experimentar interrupções ocasionais se o seu dispositivo não é poderoso o suficiente. Uma quantidade considerável de memória também é usada, dependendo de quantas vezes você deseja que o estado seja capturado e por quanto tempo ele deve ser mantido.</string>
     <string name="rewind_save_period">Período de salvamento</string>
     <string name="rewind_length">Duração do rebobinamento</string>

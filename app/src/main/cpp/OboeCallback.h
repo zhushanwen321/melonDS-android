@@ -30,11 +30,13 @@ private:
     int stretchErrorLogCooldown;        // stretch 搬运异常的日志冷却计数（FIFOSampleBuffer 扩容抛点
                                         // 的降级路径，三 skill 裁决 20261007 固 1；常态恒不触发）
 
-    // stretch 路径（加速 + 音高保持开 + 固定档 ≤4×）的 tempo 控制器状态（设计 D4），与上方
-    // skew 控制器状态互斥活跃：stretch 下 skew 侧挂起，路径切换经 reinitSkewController 显式
-    // 重初始化。仅构造函数与音频回调线程访问
+    // stretch 路径（加速 + 音高保持开，全档位生效——2026-10-07 用户裁决；高倍速搬运带宽由
+    // SPU 环形扩容 8192 解决，子模块 SPU.cpp InitOutput 同步）的 tempo 控制器状态（设计 D4），
+    // 与上方 skew 控制器状态互斥活跃：stretch 下 skew 侧挂起（skew 恒 1.0，速率匹配全交
+    // SoundTouch），路径切换经 reinitSkewController 显式重初始化。仅构造函数与音频回调线程访问
     soundtouch::SoundTouch _stretch;     // 时间拉伸器：构造即创建不懒建（设计 §7.2），生命周期随流重建对齐
-    s16 stretchTransferBuffer[2048 * 2]; // SPU→SoundTouch 搬运缓冲（2048 立体声帧全容量，回调内零堆分配）
+    s16 stretchTransferBuffer[8192 * 2]; // SPU→SoundTouch 搬运缓冲（8192 立体声帧 = SPU 环形
+                                         // 全容量，子模块 SPU.cpp InitOutput 扩容后同步；回调内零堆分配）
     bool lastStretchActive;             // 上一回调周期的 stretch 激活快照（路径切换检测）
     double tempoEmaMeasuredRatio;       // 实测倍速（fps/基准帧率）的 EMA 平滑值——tempo 前馈主部；
                                         // stretch 期迟滞静音的判定输入（skew 侧 EMA 挂起，设计 D4）
