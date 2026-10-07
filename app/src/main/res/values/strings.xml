@@ -481,11 +481,17 @@
 
     <string name="fast_forward_audio_mute_threshold_title">Fast-forward audio mute threshold</string>
     <string name="fast_forward_audio_mute_threshold_entry_never">Never</string>
+    <string name="fast_forward_audio_mute_threshold_entry_1_5x">Above 1.5x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_2x">Above 2x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_3x">Above 3x</string>
     <string name="fast_forward_audio_mute_threshold_entry_4x">Above 4x</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">Above 8x</string>
 
     <string-array name="fast_forward_audio_mute_threshold_options">
         <item>@string/fast_forward_audio_mute_threshold_entry_never</item>
+        <item>@string/fast_forward_audio_mute_threshold_entry_1_5x</item>
+        <item>@string/fast_forward_audio_mute_threshold_entry_2x</item>
+        <item>@string/fast_forward_audio_mute_threshold_entry_3x</item>
         <item>@string/fast_forward_audio_mute_threshold_entry_4x</item>
         <item>@string/fast_forward_audio_mute_threshold_entry_8x</item>
     </string-array>

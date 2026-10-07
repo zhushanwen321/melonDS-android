@@ -143,6 +143,9 @@
 
     <string name="fast_forward_audio_mute_threshold_title">Seuil de coupure du son de l\'avance rapide</string>
     <string name="fast_forward_audio_mute_threshold_entry_never">Jamais</string>
+    <string name="fast_forward_audio_mute_threshold_entry_1_5x">Au-dessus de x1,5</string>
+    <string name="fast_forward_audio_mute_threshold_entry_2x">Au-dessus de x2</string>
+    <string name="fast_forward_audio_mute_threshold_entry_3x">Au-dessus de x3</string>
     <string name="fast_forward_audio_mute_threshold_entry_4x">Au-dessus de x4</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">Au-dessus de x8</string>
     <string name="fast_forward_pitch_preserve_title">Préservation de la tonalité de l\'avance rapide</string>

@@ -153,6 +153,9 @@
 
     <string name="fast_forward_audio_mute_threshold_title">Soglia di silenziamento audio dell\'avanzamento rapido</string>
     <string name="fast_forward_audio_mute_threshold_entry_never">Mai</string>
+    <string name="fast_forward_audio_mute_threshold_entry_1_5x">Oltre 1.5x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_2x">Oltre 2x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_3x">Oltre 3x</string>
     <string name="fast_forward_audio_mute_threshold_entry_4x">Oltre 4x</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">Oltre 8x</string>
     <string name="fast_forward_pitch_preserve_title">Preservazione del tono dell\'avanzamento rapido</string>

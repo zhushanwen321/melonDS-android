@@ -131,6 +131,9 @@
 
     <string name="fast_forward_audio_mute_threshold_title">Limite de mudo do áudio do avanço rápido</string>
     <string name="fast_forward_audio_mute_threshold_entry_never">Nunca</string>
+    <string name="fast_forward_audio_mute_threshold_entry_1_5x">Acima de 1.5x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_2x">Acima de 2x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_3x">Acima de 3x</string>
     <string name="fast_forward_audio_mute_threshold_entry_4x">Acima de 4x</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">Acima de 8x</string>
     <string name="fast_forward_pitch_preserve_title">Preservação de tom do avanço rápido</string>

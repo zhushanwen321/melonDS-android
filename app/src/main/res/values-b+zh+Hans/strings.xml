@@ -171,6 +171,9 @@
 
     <string name="fast_forward_audio_mute_threshold_title">快进音频静音阈值</string>
     <string name="fast_forward_audio_mute_threshold_entry_never">从不</string>
+    <string name="fast_forward_audio_mute_threshold_entry_1_5x">超过 1.5 倍</string>
+    <string name="fast_forward_audio_mute_threshold_entry_2x">超过 2 倍</string>
+    <string name="fast_forward_audio_mute_threshold_entry_3x">超过 3 倍</string>
     <string name="fast_forward_audio_mute_threshold_entry_4x">超过 4 倍</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">超过 8 倍</string>
     <string name="fast_forward_pitch_preserve_title">快进音高保持</string>

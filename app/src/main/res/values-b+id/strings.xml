@@ -171,6 +171,9 @@
 
     <string name="fast_forward_audio_mute_threshold_title">Ambang bisu audio maju-cepat</string>
     <string name="fast_forward_audio_mute_threshold_entry_never">Tidak pernah</string>
+    <string name="fast_forward_audio_mute_threshold_entry_1_5x">Di atas 1.5x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_2x">Di atas 2x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_3x">Di atas 3x</string>
     <string name="fast_forward_audio_mute_threshold_entry_4x">Di atas 4x</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">Di atas 8x</string>
     <string name="fast_forward_pitch_preserve_title">Pertahankan nada maju-cepat</string>

@@ -171,6 +171,9 @@
 
     <string name="fast_forward_audio_mute_threshold_title">Порог отключения звука при ускорении</string>
     <string name="fast_forward_audio_mute_threshold_entry_never">Никогда</string>
+    <string name="fast_forward_audio_mute_threshold_entry_1_5x">Выше 1.5x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_2x">Выше 2x</string>
+    <string name="fast_forward_audio_mute_threshold_entry_3x">Выше 3x</string>
     <string name="fast_forward_audio_mute_threshold_entry_4x">Выше 4x</string>
     <string name="fast_forward_audio_mute_threshold_entry_8x">Выше 8x</string>
     <string name="fast_forward_pitch_preserve_title">Сохранение тона при ускорении</string>
