@@ -82,12 +82,9 @@ static double slewLimitSkew(double target, double previous)
 static constexpr double kStretchTempoMin = 1.0;
 static constexpr double kStretchTempoMax = 8.0;
 
-// 积压反馈基准：SoundTouch 固有算法窗口的输出时长当量（初值 0.1s，⏳ 真机定档）
-static constexpr double kStretchBacklogBaselineSec = 0.1;
-
-// 积压安全阀阈值：250ms 输出时长当量（初值，⏳ 真机定档）。正常路径由 tempo 反馈跑通，
-// 安全阀只覆盖极端（<0.1%）
-static constexpr double kStretchBacklogValveSec = 0.250;
+// 成品队列安全阀阈值：150ms 输出时长当量。被控量 = SoundTouch 成品队列（输出 FIFO），
+// 反馈基准动态跟随回调帧数（见 onAudioReady）；安全阀只覆盖反馈失效的极端（<0.1%）
+static constexpr double kStretchOutValveSec = 0.150;
 
 // tempo 种子 = max(档位倍速, 1.5)（不限速档 multiplier = 0 不能直取，tempo 非法；取设置项
 // 最低档 1.5 保守起步，首个测量快照到达后即用真值）——无 kBaseSkewRatio 基准因子是设计 D4
@@ -97,20 +94,23 @@ static constexpr double kStretchBacklogValveSec = 0.250;
 // 无需两级速率分配（该形态曾被尝试，因 blip 重采样语义为变调而非音高保持而废止）
 static constexpr double kStretchSeedSpeedFloor = 1.5;
 
-// 积压输出时长当量（设计 D4/§4.2）：SoundTouch 喂入未消费样本数折算到输出域时长——
-// M 个输入样本以 tempo 压缩后产出 M/tempo 个输出样本 @48000Hz。48000 = 本项目固定输出
-// 采样率（MelonDSAudio.cpp 流构建同款硬编码）
+// 输入积压时长当量（仅探针观测，2026-10-08 反馈改版后被控量已换成品队列）：SoundTouch
+// 喂入未消费样本数折算到输出域时长——M 个输入样本以 tempo 压缩后产出 M/tempo 个输出样本
+// @48000Hz。48000 = 本项目固定输出采样率（MelonDSAudio.cpp 流构建同款硬编码）
 static double backlogSeconds(uint backlogSamples, double tempo)
 {
     return backlogSamples / (48000.0 * tempo);
 }
 
-// 积压反馈修正因子（设计 D4，同构 fillFeedbackFactor）：积压 > 基准 = 消化偏慢 → tempo 上调；
-// 分段增益与 ±2% 乘积钳原样迁移——tempo 就是语速，修正幅度同压在听觉不可辨的范围内
-static double backlogFeedbackFactor(double backlogSec)
+// 水位反馈修正因子（2026-10-08 真机改版：被控量 = SoundTouch 成品队列，非输入积压——
+// SoundTouch 来料即加工，输入积压不受 tempo 控制、只能观测到加工窗口零头，旧反馈因此
+// 永久饱和在 -2% 档，产出持续高于消费 ~2%，差值全部积分进无人观测的成品队列——真机
+// 实测 70s 涨到 1.4s 延迟即此）：成品队列 > 基准 = 产速偏高 → tempo 上调压产；
+// 分段增益与 ±2% 乘积钳保留——tempo 就是语速，修正幅度压在听觉不可辨范围内
+static double outFifoFeedbackFactor(double outFifoSec, double baselineSec)
 {
-    double backlogErr = (backlogSec - kStretchBacklogBaselineSec) / kStretchBacklogBaselineSec;
-    return std::clamp(1.0 + (0.05 + 0.25 * std::fabs(backlogErr)) * backlogErr, 0.98, 1.02);
+    double err = (outFifoSec - baselineSec) / baselineSec;
+    return std::clamp(1.0 + (0.05 + 0.25 * std::fabs(err)) * err, 0.98, 1.02);
 }
 
 // tempo 变化率限制（每回调 ±2%，设计 D4）：stretch 侧比 skew 侧 ±1% 放宽——tempo 波动的
@@ -251,6 +251,11 @@ OboeCallback::OboeCallback(int volume, void (*onErrorCallback)(void), std::ostre
         _stretch.setSampleRate(48000);
         _stretch.setChannels(2);
         _stretch.setSetting(SETTING_USE_QUICKSEEK, 0);
+        // SEQUENCE_MS 显式 40：默认 auto（@48kHz 约 80ms）使加工窗口沉淀约 56ms 内容的输入
+        // 水位，是拉伸路径音画延迟的最大可动项——真机探针实测（2026-10-08）积压仅 16-40ms
+        // 且调低积压基准压不动它（水位由本参数决定）；40ms 窗口换更低延迟，代价为拉伸颗粒
+        // 变粗（seekwindow/overlap 保持 auto，随 sequence 等比缩小）
+        _stretch.setSetting(SETTING_SEQUENCE_MS, 40);
     }
     catch (...)
     {
@@ -331,17 +336,22 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
     int num_in;
     if (stretchActive)
     {
-        // ===== stretch 路径（设计 §7.2 读路径 + D4 tempo 控制器）=====
-        // 积压观测（D4/§4.2）：本回调搬运前的 SoundTouch 输入队列存量，按上一回调应用的
-        // tempo 折算输出时长当量；转换/安全阀 clear 后归零，反馈与探针读到真实清空态
-        double backlogSec = backlogSeconds(_stretch.numUnprocessedSamples(), appliedTempo);
+        // ===== stretch 路径（设计 §7.2 读路径 + D4 tempo 控制器；2026-10-08 反馈改版）=====
+        // 被控量 = SoundTouch 成品队列（输出 FIFO，numSamples，输出帧直读时长）：产/消平衡
+        // 的唯一积分器——tempo 偏低则成品持续堆积、偏高则持续欠产断流，反馈在此闭环。
+        // 输入积压（numUnprocessedSamples）不受 tempo 控制（来料即加工），仅作探针观测。
+        // 基准动态跟随回调帧数：numFrames（本回调取用量）+ 1536 帧（32ms，覆盖最小 tempo
+        // 1.5 下一窗成品的锯齿幅度 1920/1.5≈1280 帧不击穿），转换/安全阀 clear 后归零
+        double outFifoSec = _stretch.numSamples() / 48000.0;
+        double outBaselineSec = ((double) numFrames + 1536.0) / 48000.0;
+        double inBacklogSec = backlogSeconds(_stretch.numUnprocessedSamples(), appliedTempo);
         double tempo;
         if (!lastStretchActive || multiplier != lastMultiplier || stretchResetTriggered)
         {
             // stretch 转换（设计 D3 进入规则）：进入 stretch（路径切换/流重建出生后首回调）、
             // 加速中倍速热更新（含跨全档位边界 2×↔8× 往返）、读档/rewind 内容不连续——
-            // SoundTouch.clear() 全清（积压废弃，重填期口径 §5.2）+ tempo 转换初始化：
-            // 种子 = max(档位倍速, 1.5)（不限速档 multiplier=0 兜底）+ 待首测 +
+            // SoundTouch.clear() 全清（输入输出双清，积压废弃，重填期口径 §5.2）+ tempo
+            // 转换初始化：种子 = max(档位倍速, 1.5)（不限速档 multiplier=0 兜底）+ 待首测 +
             // 首测快照直接生效（不经 slew）。种子是精心选择的初值，直接应用
             _stretch.clear();
             double seed = std::max((double) multiplier, kStretchSeedSpeedFloor);
@@ -350,15 +360,15 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
             tempoFpsAtTransition = fps.load(std::memory_order_acquire);
             tempoAwaitingFirstMeasurementCycles = 0;
             backlogFreezeCycles = 0;
-            backlogSec = 0.0;
+            outFifoSec = 0.0;
             tempo = seed;
         }
-        else if (backlogSec > kStretchBacklogValveSec)
+        else if (outFifoSec > kStretchOutValveSec)
         {
-            // 积压安全阀（设计 D4 极端兜底，<0.1%）：tempo 跟踪严重偏低导致积压失控时
+            // 成品队列安全阀（设计 D4 极端兜底，<0.1%）：反馈失效导致成品堆积失控时
             // clear() 全清重填（SoundTouch 无逐样本丢弃 API，全清是既定落地形态）。
-            // 重初始化 = 转换规则 + EMA 上探——积压失控 = 前馈偏低，与现状 SPU 安全阀
-            // 同一校正逻辑；反馈冻结 10 回调（照搬 Trim 后冻结形态，防读到假低积压）
+            // 重初始化 = 转换规则 + EMA 上探——堆积 = 产速偏高即前馈偏高，上探把 tempo
+            // 顶过真值加速排空；反馈冻结 10 回调（照搬 Trim 后冻结形态，防读到假低水位）
             _stretch.clear();
             double seed = std::max((double) multiplier, kStretchSeedSpeedFloor);
             tempoEmaMeasuredRatio = seed;
@@ -371,18 +381,18 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
                 stretchValveLogCooldown--;
             else
             {
-                LOG_WARN("melonDS", "stretch backlog safety valve: %.1fms > %dms, clearing stretcher",
-                         backlogSec * 1000.0, (int) (kStretchBacklogValveSec * 1000.0));
+                LOG_WARN("melonDS", "stretch outfifo safety valve: %.1fms > %dms, clearing stretcher",
+                         outFifoSec * 1000.0, (int) (kStretchOutValveSec * 1000.0));
                 stretchValveLogCooldown = 100; // ≈0.4-1 秒一条，触发段只留频率证据不留洪泛
             }
-            backlogSec = 0.0;
+            outFifoSec = 0.0;
             tempo = tempoEmaMeasuredRatio;
         }
         else
         {
             // 触发条件与 skew 侧转换规则族同构（D4）：待首测（fps 值变化 = 新测量到达，
             // 回调数上限兜底「测量已发生但值碰撞」）→ 快照直接生效；否则 EMA 平滑 +
-            // 积压反馈 + slew
+            // 成品队列反馈 + slew
             bool snapshotApplied = false;
             float measuredFps = fps.load(std::memory_order_acquire);
             if (tempoAwaitingFirstMeasurement)
@@ -406,13 +416,13 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
             }
             else
             {
-                // EMA 前馈目标 × 积压反馈修正，再总钳（反馈作用在前馈目标之后、总钳之前）。
-                // 反馈冻结期 factor 取 1——clear 造成的假低积压不参与修正，等真实积压重新形成
+                // EMA 前馈目标 × 成品队列反馈修正，再总钳（反馈作用在前馈目标之后、总钳之前）。
+                // 反馈冻结期 factor 取 1——clear 造成的假空队列不参与修正，等真实水位重新形成
                 double target = tempoEmaMeasuredRatio;
                 if (backlogFreezeCycles > 0)
                     backlogFreezeCycles--;
                 else
-                    target *= backlogFeedbackFactor(backlogSec);
+                    target *= outFifoFeedbackFactor(outFifoSec, outBaselineSec);
 
                 tempo = std::clamp(slewLimitTempo(target, appliedTempo), kStretchTempoMin, kStretchTempoMax);
             }
@@ -441,8 +451,9 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
         // 诊断语义失效不再触发（stretch 分支内不挂原探针）。
         // TODO(simplify): 本块与 refill 段共 6 处 LOG_DEBUG 共用 "audio-probe " 前缀，探针
         // 数量增长后可收为变参宏（code-simplify 20261007 TODO-1，当前净收益≈0 不立改）
-        LOG_DEBUG("melonDS", "audio-probe stretch backlog: backlogMs=%.1f ff=%d fps=%.1f tempo=%.3f",
-                  backlogSec * 1000.0, fastForward, fps.load(std::memory_order_relaxed), appliedTempo);
+        LOG_DEBUG("melonDS", "audio-probe stretch backlog: inbkMs=%.1f outMs=%.1f ff=%d fps=%.1f tempo=%.3f spu=%d",
+                  inBacklogSec * 1000.0, outFifoSec * 1000.0, fastForward,
+                  fps.load(std::memory_order_relaxed), appliedTempo, fillLevel);
         // 探针状态为成员（OboeCallback.h）：随流重建（对象重建）重置，防跨流残留
         if (fillLevel > stretchSpuPeakFill)
         {
@@ -493,13 +504,13 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
             if (!stretchRefillActive)
             {
                 stretchRefillActive = true;
-                LOG_DEBUG("melonDS", "audio-probe refill start: t=%.1fms backlogMs=%.1f", steadyMs(), backlogSec * 1000.0);
+                LOG_DEBUG("melonDS", "audio-probe refill start: t=%.1fms outMs=%.1f", steadyMs(), outFifoSec * 1000.0);
             }
         }
         else if (stretchRefillActive)
         {
             stretchRefillActive = false;
-            LOG_DEBUG("melonDS", "audio-probe refill end: t=%.1fms got=%d backlogMs=%.1f (output resumed)", steadyMs(), got, backlogSec * 1000.0);
+            LOG_DEBUG("melonDS", "audio-probe refill end: t=%.1fms got=%d outMs=%.1f (output resumed)", steadyMs(), got, outFifoSec * 1000.0);
         }
 #endif
     }
